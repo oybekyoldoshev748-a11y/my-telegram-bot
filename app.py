@@ -1,576 +1,765 @@
 import os
-import json
 import time
 import threading
-import urllib.parse
-import urllib.request
-import urllib.error
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from flask import Flask
+import telebot
+from telebot import types
 
-# ============================================================
-# TELEGRAM SMM BOT - ONE FILE / RENDER READY
-# No external Python package is required.
-# Render Start Command can be: python app.py
-#
-# Environment variables:
-# BOT_TOKEN = Telegram bot token
-# ADMIN_ID  = your Telegram numeric ID
-#
-# Optional:
-# PORT      = Render port (default 10000)
-# SMM_API_URL = generic SMM API endpoint
-# SMM_API_KEY = generic SMM API key
-# ============================================================
+# =========================================================
+# SOZLAMALAR
+# =========================================================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-ADMIN_ID = os.getenv("ADMIN_ID", "").strip()
-PORT = int(os.getenv("PORT", "10000"))
-DATA_FILE = "bot_data.json"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-if not BOT_TOKEN:
-    print("ERROR: BOT_TOKEN environment variable is missing.")
-if not ADMIN_ID:
-    print("WARNING: ADMIN_ID environment variable is missing.")
+# Majburiy obuna kanallari
+# Masalan: ["@kanalingiz"]
+REQUIRED_CHANNELS = [
+    # "@kanalingiz"
+]
 
-try:
-    ADMIN_ID_INT = int(ADMIN_ID)
-except Exception:
-    ADMIN_ID_INT = 0
-
-API = "https://api.telegram.org/bot" + BOT_TOKEN
-
-DEFAULT_SERVICES = {
-    "👤 Obunachi": 1000,
-    "❤️ Like": 1500,
-    "👁 Ko'rish": 500,
-    "💬 Komment": 3000,
-    "📈 Kanal reklama": 10000,
+# Xizmatlar va narxlar (1000 dona uchun)
+SERVICES = {
+    "Instagram obunachi": 1000,
+    "Instagram like": 500,
+    "Telegram obunachi": 1500,
+    "Telegram post ko‘rish": 700,
+    "TikTok like": 600,
+    "TikTok obunachi": 1200,
 }
 
-data_lock = threading.RLock()
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN topilmadi! Render Environment Variables bo‘limiga BOT_TOKEN qo‘ying.")
 
-def default_data():
-    return {
-        "users": {},
-        "orders": [],
-        "services": DEFAULT_SERVICES.copy(),
-        "settings": {
-            "channel": "",
-            "channel_url": "",
-            "support": "",
-            "payment_text": "💳 To'lov uchun admin bilan bog'laning.",
-            "admin_note": "",
-            "welcome": "👋 Xush kelibsiz!\n\nKerakli xizmatni tanlang.",
-            "smm_api_url": os.getenv("SMM_API_URL", ""),
-            "smm_api_key": os.getenv("SMM_API_KEY", ""),
-        },
-        "next_order_id": 1,
-        "banned": [],
-        "pending_checks": {},
-    }
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return default_data()
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            d = json.load(f)
-        base = default_data()
-        for k, v in base.items():
-            if k not in d:
-                d[k] = v
-        return d
-    except Exception as e:
-        print("DATA LOAD ERROR:", e)
-        return default_data()
+# Vaqtinchalik ma'lumotlar
+users = {}
+orders = []
+next_order_id = 1
 
-db = load_data()
 
-def save():
-    with data_lock:
-        tmp = DATA_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(db, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, DATA_FILE)
+# =========================================================
+# FOYDALANUVCHI
+# =========================================================
 
-def tg(method, params=None):
-    if not BOT_TOKEN:
-        return {"ok": False, "description": "BOT_TOKEN missing"}
-    params = params or {}
-    encoded = urllib.parse.urlencode(params).encode()
-    try:
-        req = urllib.request.Request(API + "/" + method, data=encoded)
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except Exception as e:
-        print("Telegram API ERROR:", method, e)
-        return {"ok": False, "description": str(e)}
+def get_user(user_id):
+    if user_id not in users:
+        users[user_id] = {
+            "balance": 0,
+            "orders": [],
+            "referrals": 0,
+            "referrer": None,
+        }
+    return users[user_id]
 
-def send(chat_id, text, keyboard=None, parse_mode="HTML"):
-    p = {"chat_id": chat_id, "text": text}
-    if parse_mode:
-        p["parse_mode"] = parse_mode
-    if keyboard:
-        p["reply_markup"] = json.dumps(keyboard, ensure_ascii=False)
-    return tg("sendMessage", p)
 
-def edit(chat_id, message_id, text, keyboard=None):
-    p = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
-    if keyboard:
-        p["reply_markup"] = json.dumps(keyboard, ensure_ascii=False)
-    return tg("editMessageText", p)
+# =========================================================
+# MAJBURIY OBUNA
+# =========================================================
 
-def answer(callback_id, text=""):
-    return tg("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
-
-def is_admin(uid):
-    return int(uid) == ADMIN_ID_INT and ADMIN_ID_INT != 0
-
-def user(uid, name=""):
-    uid = str(uid)
-    with data_lock:
-        if uid not in db["users"]:
-            db["users"][uid] = {
-                "id": int(uid),
-                "name": name or "",
-                "balance": 0,
-                "orders": 0,
-                "ref": None,
-                "refs": 0,
-                "joined": int(time.time()),
-            }
-            save()
-        elif name:
-            db["users"][uid]["name"] = name
-            save()
-        return db["users"][uid]
-
-def kb(rows):
-    return {"inline_keyboard": rows}
-
-def main_menu(uid):
-    rows = [
-        [{"text": "🛍 Xizmatlar", "callback_data": "services"},
-         {"text": "💰 Balans", "callback_data": "balance"}],
-        [{"text": "🛒 Buyurtmalarim", "callback_data": "my_orders"},
-         {"text": "💳 Balans to'ldirish", "callback_data": "deposit"}],
-        [{"text": "👥 Referal", "callback_data": "referral"},
-         {"text": "📞 Yordam", "callback_data": "support"}],
-    ]
-    if is_admin(uid):
-        rows.append([{"text": "👑 ADMIN PANEL", "callback_data": "admin"}])
-    return kb(rows)
-
-def admin_menu():
-    return kb([
-        [{"text": "📊 Statistika", "callback_data": "a_stats"},
-         {"text": "🛒 Buyurtmalar", "callback_data": "a_orders"}],
-        [{"text": "💰 Balans qo'shish", "callback_data": "a_balance"},
-         {"text": "🛍 Xizmatlar", "callback_data": "a_services"}],
-        [{"text": "💵 Narxlar", "callback_data": "a_prices"},
-         {"text": "📣 Reklama", "callback_data": "a_broadcast"}],
-        [{"text": "📢 Majburiy obuna", "callback_data": "a_channel"},
-         {"text": "⚙️ Sozlamalar", "callback_data": "a_settings"}],
-        [{"text": "🔌 SMM API", "callback_data": "a_smm"},
-         {"text": "📥 Cheklar", "callback_data": "a_checks"}],
-        [{"text": "🏠 Bosh menyu", "callback_data": "home"}],
-    ])
-
-def back_admin():
-    return kb([[{"text": "⬅️ Admin panel", "callback_data": "admin"}]])
-
-def esc(s):
-    s = str(s)
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-def subscription_ok(uid):
-    channel = db["settings"].get("channel", "").strip()
-    if not channel:
+def check_subscription(user_id):
+    if not REQUIRED_CHANNELS:
         return True
-    r = tg("getChatMember", {"chat_id": channel, "user_id": uid})
-    if not r.get("ok"):
-        return True
-    status = r.get("result", {}).get("status", "")
-    return status in ("creator", "administrator", "member")
 
-def subscription_prompt(uid):
-    channel = db["settings"].get("channel", "")
-    url = db["settings"].get("channel_url", "") or ("https://t.me/" + channel.lstrip("@"))
-    return kb([
-        [{"text": "📢 Kanalga o'tish", "url": url}],
-        [{"text": "✅ Tekshirish", "callback_data": "check_sub"}],
-    ])
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = bot.get_chat_member(channel, user_id)
+            if member.status in ["left", "kicked"]:
+                return False
+        except Exception:
+            return False
 
-def show_home(chat_id, uid):
-    u = user(uid)
-    text = db["settings"].get("welcome", "👋 Xush kelibsiz!")
-    text += f"\n\n💰 Balans: <b>{u['balance']:,} so'm</b>"
-    send(chat_id, text, main_menu(uid))
+    return True
 
-def services_text():
-    if not db["services"]:
-        return "🛍 <b>XIZMATLAR</b>\n\nHozircha xizmatlar yo'q."
-    return "🛍 <b>XIZMATLAR</b>\n\n" + "\n\n".join(
-        f"🔹 <b>{esc(n)}</b>\n💰 {p:,} so'm / 1000" for n, p in db["services"].items()
+
+def subscription_message():
+    text = "❌ <b>Botdan foydalanish uchun kanallarga obuna bo‘ling:</b>\n\n"
+
+    for channel in REQUIRED_CHANNELS:
+        text += f"📢 {channel}\n"
+
+    text += "\n✅ Obuna bo‘lgach, «Tekshirish» tugmasini bosing."
+
+    markup = types.InlineKeyboardMarkup()
+
+    for channel in REQUIRED_CHANNELS:
+        markup.add(
+            types.InlineKeyboardButton(
+                f"📢 {channel}",
+                url=f"https://t.me/{channel.replace('@', '')}",
+            )
+        )
+
+    markup.add(
+        types.InlineKeyboardButton(
+            "✅ Tekshirish",
+            callback_data="check_sub",
+        )
     )
 
-def services_menu():
-    rows = []
-    for name in db["services"]:
-        rows.append([{"text": name, "callback_data": "svc:" + name}])
-    rows.append([{"text": "⬅️ Bosh menyu", "callback_data": "home"}])
-    return kb(rows)
+    return text, markup
 
-def ask_order(chat_id, uid, service):
-    price = db["services"].get(service)
-    if price is None:
+
+# =========================================================
+# ASOSIY MENU
+# =========================================================
+
+def main_menu():
+    markup = types.ReplyKeyboardMarkup(
+        resize_keyboard=True,
+        row_width=2,
+    )
+
+    markup.add(
+        types.KeyboardButton("🛍 Xizmatlar"),
+        types.KeyboardButton("📱 Nomer olish"),
+    )
+    markup.add(
+        types.KeyboardButton("🛒 Buyurtmalarim"),
+        types.KeyboardButton("👥 Referral"),
+    )
+    markup.add(
+        types.KeyboardButton("💵 Hisobim"),
+        types.KeyboardButton("💰 Hisob to‘ldirish"),
+    )
+    markup.add(
+        types.KeyboardButton("📞 Murojaat"),
+        types.KeyboardButton("☎️ Qo‘llab-quvvatlash"),
+    )
+    markup.add(types.KeyboardButton("🤝 Hamkorlik"))
+
+    return markup
+
+
+# =========================================================
+# START
+# =========================================================
+
+@bot.message_handler(commands=["start"])
+def start(message):
+    user_id = message.from_user.id
+    user = get_user(user_id)
+
+    args = message.text.split()
+
+    if len(args) > 1:
+        try:
+            referrer = int(args[1])
+
+            if (
+                referrer != user_id
+                and user["referrer"] is None
+                and referrer in users
+            ):
+                user["referrer"] = referrer
+                users[referrer]["referrals"] += 1
+                users[referrer]["balance"] += 500
+
+                bot.send_message(
+                    referrer,
+                    "🎉 Sizning referralingiz botga qo‘shildi!\n"
+                    "💰 Hisobingizga 500 so‘m qo‘shildi.",
+                )
+        except (ValueError, TypeError):
+            pass
+
+    if not check_subscription(user_id):
+        text, markup = subscription_message()
+        bot.send_message(
+            user_id,
+            text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
         return
-    send(chat_id,
-         f"🛍 <b>{esc(service)}</b>\n\n"
-         f"💰 Narx: <b>{price:,} so'm / 1000</b>\n\n"
-         "Buyurtma miqdorini yuboring.\n"
-         "Masalan: <b>1000</b>",
-         kb([[{"text": "❌ Bekor qilish", "callback_data": "home"}]]))
-    pending[uid] = {"type": "quantity", "service": service}
 
-pending = {}
+    bot.send_message(
+        user_id,
+        "👋 <b>Assalomu alaykum!</b>\n\n"
+        "🤖 Xizmatlar botiga xush kelibsiz!\n"
+        "Kerakli bo‘limni tanlang:",
+        parse_mode="HTML",
+        reply_markup=main_menu(),
+    )
 
-def create_order(uid, chat_id, quantity):
-    state = pending.get(uid)
-    if not state or state.get("type") != "quantity":
+
+# =========================================================
+# OBUNANI TEKSHIRISH
+# =========================================================
+
+@bot.callback_query_handler(func=lambda call: call.data == "check_sub")
+def check_sub(call):
+    user_id = call.from_user.id
+
+    if check_subscription(user_id):
+        bot.answer_callback_query(call.id, "✅ Obuna tasdiqlandi!")
+        bot.send_message(
+            user_id,
+            "✅ Obuna tasdiqlandi!\n\nAsosiy menyu:",
+            reply_markup=main_menu(),
+        )
+    else:
+        bot.answer_callback_query(
+            call.id,
+            "❌ Hali barcha kanallarga obuna bo‘lmagansiz!",
+            show_alert=True,
+        )
+
+
+# =========================================================
+# XIZMATLAR
+# =========================================================
+
+@bot.message_handler(func=lambda m: m.text == "🛍 Xizmatlar")
+def services(message):
+    if not check_subscription(message.from_user.id):
+        text, markup = subscription_message()
+        bot.send_message(
+            message.chat.id,
+            text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
         return
-    service = state["service"]
-    price_per_1000 = int(db["services"][service])
+
+    markup = types.InlineKeyboardMarkup()
+
+    for service, price in SERVICES.items():
+        markup.add(
+            types.InlineKeyboardButton(
+                f"🛍 {service} — {price:,} so‘m",
+                callback_data="service|" + service,
+            )
+        )
+
+    bot.send_message(
+        message.chat.id,
+        "🛍 <b>Xizmatlar:</b>\n\nKerakli xizmatni tanlang:",
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data.startswith("service|")
+)
+def select_service(call):
+    service = call.data.split("|", 1)[1]
+
+    if service not in SERVICES:
+        bot.answer_callback_query(call.id, "Xizmat topilmadi!")
+        return
+
+    price = SERVICES[service]
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "🛒 Buyurtma berish",
+            callback_data="order|" + service,
+        )
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            "⬅️ Orqaga",
+            callback_data="back_services",
+        )
+    )
+
+    bot.edit_message_text(
+        f"🛍 <b>{service}</b>\n\n"
+        f"💰 Narxi: <b>{price:,} so‘m</b>\n\n"
+        "🛒 Buyurtma berish uchun tugmani bosing.",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data == "back_services"
+)
+def back_services(call):
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(
+        "🛍 <b>Xizmatlar:</b>\n\nKerakli xizmatni tanlang:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="HTML",
+        reply_markup=service_keyboard(),
+    )
+
+
+def service_keyboard():
+    markup = types.InlineKeyboardMarkup()
+
+    for service, price in SERVICES.items():
+        markup.add(
+            types.InlineKeyboardButton(
+                f"🛍 {service} — {price:,} so‘m",
+                callback_data="service|" + service,
+            )
+        )
+
+    return markup
+
+
+# =========================================================
+# BUYURTMA
+# =========================================================
+
+@bot.callback_query_handler(
+    func=lambda call: call.data.startswith("order|")
+)
+def start_order(call):
+    service = call.data.split("|", 1)[1]
+
+    if service not in SERVICES:
+        bot.answer_callback_query(call.id, "Xizmat topilmadi!")
+        return
+
+    bot.answer_callback_query(call.id)
+
+    msg = bot.send_message(
+        call.message.chat.id,
+        f"🛒 <b>{service}</b>\n\n"
+        "🔗 Xizmat bajariladigan havolani yuboring.\n\n"
+        "Masalan:\nhttps://t.me/kanal",
+        parse_mode="HTML",
+    )
+
+    bot.register_next_step_handler(msg, get_link, service)
+
+
+def get_link(message, service):
+    if not message.text:
+        msg = bot.send_message(
+            message.chat.id,
+            "❌ Havola yuboring.",
+        )
+        bot.register_next_step_handler(msg, get_link, service)
+        return
+
+    link = message.text.strip()
+
+    if not link.startswith(("http://", "https://")):
+        msg = bot.send_message(
+            message.chat.id,
+            "❌ Havola noto‘g‘ri.\n\n"
+            "https:// bilan boshlanadigan havola yuboring.",
+        )
+        bot.register_next_step_handler(msg, get_link, service)
+        return
+
+    msg = bot.send_message(
+        message.chat.id,
+        "🔢 Miqdorni kiriting.\n\nMasalan: <b>1000</b>",
+        parse_mode="HTML",
+    )
+
+    bot.register_next_step_handler(
+        msg,
+        get_quantity,
+        service,
+        link,
+    )
+
+
+def get_quantity(message, service, link):
+    global next_order_id
+
     try:
-        quantity = int(quantity)
-    except Exception:
-        send(chat_id, "❌ Miqdor faqat raqam bo'lishi kerak.")
+        quantity = int(message.text.strip())
+    except (ValueError, AttributeError):
+        msg = bot.send_message(
+            message.chat.id,
+            "❌ Miqdorni faqat raqam bilan kiriting.",
+        )
+        bot.register_next_step_handler(
+            msg,
+            get_quantity,
+            service,
+            link,
+        )
         return
-    if quantity < 1 or quantity > 10000000:
-        send(chat_id, "❌ Miqdor noto'g'ri.")
+
+    if quantity <= 0:
+        msg = bot.send_message(
+            message.chat.id,
+            "❌ Miqdor 0 dan katta bo‘lishi kerak.",
+        )
+        bot.register_next_step_handler(
+            msg,
+            get_quantity,
+            service,
+            link,
+        )
         return
-    total = max(1, int((price_per_1000 * quantity + 999) // 1000))
-    u = user(uid)
-    if u["balance"] < total:
-        send(chat_id,
-             f"❌ Balansingiz yetarli emas.\n\n"
-             f"💰 Kerak: <b>{total:,} so'm</b>\n"
-             f"💵 Balans: <b>{u['balance']:,} so'm</b>\n\n"
-             "Avval balansni to'ldiring.",
-             main_menu(uid))
-        pending.pop(uid, None)
+
+    price = SERVICES.get(service)
+
+    if price is None:
+        bot.send_message(
+            message.chat.id,
+            "❌ Xizmat topilmadi.",
+            reply_markup=main_menu(),
+        )
         return
-    order_id = db["next_order_id"]
-    db["next_order_id"] += 1
-    u["balance"] -= total
-    u["orders"] += 1
+
+    total = int(price * quantity / 1000)
+
+    if total <= 0:
+        total = 1
+
+    user = get_user(message.from_user.id)
+
+    if user["balance"] < total:
+        bot.send_message(
+            message.chat.id,
+            "❌ <b>Hisobingizda mablag‘ yetarli emas!</b>\n\n"
+            f"💰 Kerakli summa: <b>{total:,} so‘m</b>\n"
+            f"💵 Balansingiz: <b>{user['balance']:,} so‘m</b>\n\n"
+            "💰 Hisobni to‘ldiring va qayta urinib ko‘ring.",
+            parse_mode="HTML",
+            reply_markup=main_menu(),
+        )
+        return
+
+    user["balance"] -= total
+
     order = {
-        "id": order_id,
-        "user_id": int(uid),
+        "id": next_order_id,
+        "user_id": message.from_user.id,
         "service": service,
+        "link": link,
         "quantity": quantity,
         "price": total,
-        "status": "⏳ Kutilmoqda",
-        "created": int(time.time()),
-        "smm_id": None,
+        "status": "Kutilmoqda",
     }
-    db["orders"].append(order)
-    save()
-    pending.pop(uid, None)
-    send(chat_id,
-         f"✅ <b>Buyurtma qabul qilindi!</b>\n\n"
-         f"🆔 ID: <code>#{order_id}</code>\n"
-         f"🛍 {esc(service)}\n"
-         f"🔢 {quantity:,}\n"
-         f"💰 {total:,} so'm\n"
-         f"📊 {order['status']}",
-         main_menu(uid))
-    if db["settings"].get("smm_api_url"):
-        result = smm_add(order)
-        if result:
-            send(chat_id, f"🚀 SMM tizimiga yuborildi.\n🆔 SMM ID: <code>{esc(result)}</code>")
 
-def smm_add(order):
-    url = db["settings"].get("smm_api_url", "").strip()
-    key = db["settings"].get("smm_api_key", "").strip()
-    if not url or not key:
-        return None
-    # Generic SMM API: action=add, service, link, quantity.
-    # The link is requested only when the service is configured by provider.
-    # For providers requiring a different payload, change this function.
-    payload = {
-        "key": key,
-        "action": "add",
-        "service": str(order.get("service_id", "")),
-        "quantity": str(order["quantity"]),
-    }
-    try:
-        req = urllib.request.Request(
-            url, data=urllib.parse.urlencode(payload).encode(),
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        )
-        with urllib.request.urlopen(req, timeout=30) as r:
-            obj = json.loads(r.read().decode())
-        if "order" in obj:
-            order["smm_id"] = obj["order"]
-            order["status"] = "🚀 Jarayonda"
-            save()
-            return str(obj["order"])
-    except Exception as e:
-        print("SMM API ERROR:", e)
-    return None
+    orders.append(order)
+    user["orders"].append(next_order_id)
 
-def stats():
-    total_balance = sum(int(x.get("balance", 0)) for x in db["users"].values())
-    done = sum(1 for x in db["orders"] if "Bajar" in x.get("status", ""))
-    return (
-        "📊 <b>STATISTIKA</b>\n\n"
-        f"👥 Foydalanuvchilar: <b>{len(db['users'])}</b>\n"
-        f"🛒 Buyurtmalar: <b>{len(db['orders'])}</b>\n"
-        f"✅ Bajarilgan: <b>{done}</b>\n"
-        f"💰 Jami balans: <b>{total_balance:,} so'm</b>\n"
-        f"🧾 Cheklar: <b>{len(db['pending_checks'])}</b>"
+    order_id = next_order_id
+    next_order_id += 1
+
+    bot.send_message(
+        message.chat.id,
+        "✅ <b>Buyurtma qabul qilindi!</b>\n\n"
+        f"🆔 Buyurtma: <b>#{order_id}</b>\n"
+        f"🛍 Xizmat: <b>{service}</b>\n"
+        f"🔢 Miqdor: <b>{quantity}</b>\n"
+        f"💰 Narx: <b>{total:,} so‘m</b>\n"
+        "📊 Holat: <b>Kutilmoqda</b>",
+        parse_mode="HTML",
+        reply_markup=main_menu(),
     )
 
-def admin_orders_text():
-    if not db["orders"]:
-        return "📭 Buyurtmalar yo'q."
-    text = "🛒 <b>SO'NGGI BUYURTMALAR</b>\n\n"
-    for o in db["orders"][-15:][::-1]:
-        text += (
-            f"🆔 #{o['id']} | 👤 <code>{o['user_id']}</code>\n"
-            f"🛍 {esc(o['service'])}\n"
-            f"🔢 {o['quantity']:,} | 💰 {o['price']:,} so'm\n"
-            f"📊 {esc(o['status'])}\n\n"
-        )
-    return text
-
-def my_orders(uid):
-    arr = [x for x in db["orders"] if int(x["user_id"]) == int(uid)]
-    if not arr:
-        return "🛒 Sizda hali buyurtmalar yo'q."
-    text = "🛒 <b>BUYURTMALARIM</b>\n\n"
-    for o in arr[-10:][::-1]:
-        text += (
-            f"🆔 #{o['id']} — {esc(o['service'])}\n"
-            f"🔢 {o['quantity']:,} | 💰 {o['price']:,} so'm\n"
-            f"📊 {esc(o['status'])}\n\n"
-        )
-    return text
-
-def referral(uid):
-    u = user(uid)
-    bot_username = ""
-    r = tg("getMe")
-    if r.get("ok"):
-        bot_username = r["result"]["username"]
-    link = f"https://t.me/{bot_username}?start=ref_{uid}" if bot_username else f"ref_{uid}"
-    return (
-        "👥 <b>REFERAL TIZIMI</b>\n\n"
-        f"👤 Taklif qilganlaringiz: <b>{u['refs']}</b>\n\n"
-        f"🔗 Sizning havolangiz:\n<code>{link}</code>\n\n"
-        "Do'stingiz shu havola orqali kirsa, referalingiz hisoblanadi."
-    )
-
-def handle_start(msg):
-    uid = int(msg["from"]["id"])
-    chat_id = msg["chat"]["id"]
-    name = msg["from"].get("first_name", "")
-    u = user(uid, name)
-    args = (msg.get("text") or "").split(maxsplit=1)
-    if len(args) > 1 and args[1].startswith("ref_"):
+    if ADMIN_ID:
         try:
-            ref = int(args[1][4:])
-            if ref != uid and not u.get("ref") and str(ref) in db["users"]:
-                u["ref"] = ref
-                db["users"][str(ref)]["refs"] += 1
-                save()
+            bot.send_message(
+                ADMIN_ID,
+                "🔔 <b>Yangi buyurtma!</b>\n\n"
+                f"🆔 #{order_id}\n"
+                f"👤 ID: <code>{message.from_user.id}</code>\n"
+                f"🛍 {service}\n"
+                f"🔢 Miqdor: {quantity}\n"
+                f"🔗 {link}\n"
+                f"💰 {total:,} so‘m",
+                parse_mode="HTML",
+            )
         except Exception:
             pass
-    if uid in db["banned"]:
-        send(chat_id, "🚫 Siz bloklangansiz.")
-        return
-    if not subscription_ok(uid):
-        send(chat_id, "📢 <b>Botdan foydalanish uchun kanalga obuna bo'ling.</b>",
-             subscription_prompt(uid))
-        return
-    show_home(chat_id, uid)
 
-def handle_message(msg):
-    uid = int(msg["from"]["id"])
-    chat_id = msg["chat"]["id"]
-    text = (msg.get("text") or "").strip()
-    user(uid, msg["from"].get("first_name", ""))
-    if uid in db["banned"]:
-        return
-    if text.startswith("/start"):
-        handle_start(msg)
-        return
-    if text == "/admin":
-        if is_admin(uid):
-            send(chat_id, "👑 <b>ADMIN PANEL</b>", admin_menu())
-        return
-    state = pending.get(uid)
-    if state:
-        typ = state.get("type")
-        if typ == "quantity":
-            create_order(uid, chat_id, text)
-            return
-        if typ == "balance_user" and is_admin(uid):
-            try:
-                target = int(text)
-            except Exception:
-                send(chat_id, "❌ Telegram ID faqat raqam bo'lishi kerak.")
-                return
-            if str(target) not in db["users"]:
-                send(chat_id, "❌ Foydalanuvchi topilmadi.")
-                return
-            pending[uid] = {"type": "balance_amount", "target": target}
-            send(chat_id, "💵 Qancha balans qo'shamiz?\nMasalan: 10000")
-            return
-        if typ == "balance_amount" and is_admin(uid):
-            try:
-                amount = int(text)
-            except Exception:
-                send(chat_id, "❌ Summa raqam bo'lishi kerak.")
-                return
-            if amount <= 0:
-                send(chat_id, "❌ Summa 0 dan katta bo'lsin.")
-                return
-            target = str(state["target"])
-            db["users"][target]["balance"] += amount
-            save()
-            send(chat_id, f"✅ <b>Balans qo'shildi</b>\n\n👤 {target}\n➕ {amount:,} so'm\n💰 Yangi balans: {db['users'][target]['balance']:,} so'm", admin_menu())
-            try:
-                send(int(target), f"💰 Balansingiz to'ldirildi!\n➕ <b>{amount:,} so'm</b>\n💵 Balans: <b>{db['users'][target]['balance']:,} so'm</b>")
-            except Exception:
-                pass
-            pending.pop(uid, None)
-            return
-        if typ == "broadcast" and is_admin(uid):
-            pending.pop(uid, None)
-            count = 0
-            for k in list(db["users"]):
-                try:
-                    r = send(int(k), text)
-                    if r.get("ok"):
-                        count += 1
-                except Exception:
-                    pass
-                time.sleep(0.03)
-            send(chat_id, f"📣 Reklama yuborildi.\n✅ Yetkazildi: <b>{count}</b>", admin_menu())
-            return
-        if typ == "channel" and is_admin(uid):
-            db["settings"]["channel"] = text
-            db["settings"]["channel_url"] = "https://t.me/" + text.lstrip("@")
-            save()
-            pending.pop(uid, None)
-            send(chat_id, f"✅ Majburiy kanal saqlandi: <code>{esc(text)}</code>", admin_menu())
-            return
-        if typ == "service_add" and is_admin(uid):
-            parts = text.split("|", 1)
-            if len(parts) != 2:
-                send(chat_id, "Format: Xizmat nomi | narx")
-                return
-            try:
-                price = int(parts[1].strip())
-            except Exception:
-                send(chat_id, "❌ Narx raqam bo'lishi kerak.")
-                return
-            db["services"][parts[0].strip()] = price
-            save()
-            pending.pop(uid, None)
-            send(chat_id, "✅ Xizmat qo'shildi.", admin_menu())
-            return
-        if typ == "price" and is_admin(uid):
-            parts = text.split("|", 1)
-            if len(parts) != 2 or parts[0] not in db["services"]:
-                send(chat_id, "Format: Xizmat nomi | yangi narx")
-                return
-            try:
-                price = int(parts[1].strip())
-            except Exception:
-                send(chat_id, "❌ Narx raqam bo'lishi kerak.")
-                return
-            db["services"][parts[0]] = price
-            save()
-            pending.pop(uid, None)
-            send(chat_id, "✅ Narx o'zgartirildi.", admin_menu())
-            return
-        if typ == "support" and is_admin(uid):
-            db["settings"]["support"] = text
-            save()
-            pending.pop(uid, None)
-            send(chat_id, "✅ Yordam kontakti saqlandi.", admin_menu())
-            return
-        if typ == "payment" and is_admin(uid):
-            db["settings"]["payment_text"] = text
-            save()
-            pending.pop(uid, None)
-            send(chat_id, "✅ To'lov matni saqlandi.", admin_menu())
-            return
-        if typ == "smm_url" and is_admin(uid):
-            db["settings"]["smm_api_url"] = text
-            save()
-            pending.pop(uid, None)
-            send(chat_id, "✅ SMM API URL saqlandi.", admin_menu())
-            return
-        if typ == "smm_key" and is_admin(uid):
-            db["settings"]["smm_api_key"] = text
-            save()
-            pending.pop(uid, None)
-            send(chat_id, "✅ SMM API KEY saqlandi.", admin_menu())
-            return
-        if typ == "status" and is_admin(uid):
-            parts = text.split("|", 1)
-            if len(parts) == 2:
-                try:
-                    oid = int(parts[0].strip())
-                    for o in db["orders"]:
-                        if o["id"] == oid:
-                            o["status"] = parts[1].strip()
-                            save()
-                            send(chat_id, f"✅ #{oid} statusi o'zgartirildi.", admin_menu())
-                            try:
-                                send(o["user_id"], f"📦 <b>Buyurtma #{oid}</b>\n📊 Yangi status: <b>{esc(o['status'])}</b>")
-                            except Exception:
-                                pass
-                            break
-                    else:
-                        send(chat_id, "❌ Buyurtma topilmadi.")
-                except Exception:
-                    send(chat_id, "Format: ID | status")
-            pending.pop(uid, None)
-            return
 
-    if text:
-        send(chat_id, "👇 Menyudan foydalaning.", main_menu(uid))
+# =========================================================
+# BUYURTMALARIM
+# =========================================================
 
-def handle_callback(c):
-    uid = int(c["from"]["id"])
-    chat_id = c["message"]["chat"]["id"]
-    mid = c["message"]["message_id"]
-    action = c.get("data", "")
-    answer(c["id"])
-    user(uid, c["from"].get("first_name", ""))
+@bot.message_handler(func=lambda m: m.text == "🛒 Buyurtmalarim")
+def my_orders(message):
+    user = get_user(message.from_user.id)
 
-    if action == "check_sub":
-        if subscription_ok(uid):
-            answer(c["id"], "✅ Obuna tasdiqlandi!")
-            show_home(chat_id, uid)
-        else:
-            answer(c["id"], "❌ Hali obuna bo'lmagansiz.")
+    if not user["orders"]:
+        bot.send_message(
+            message.chat.id,
+            "📭 Sizda hali buyurtmalar yo‘q.",
+            reply_markup=main_menu(),
+        )
         return
 
-    if action == "home":
-        show_home(chat_id, uid)
+    text = "🛒 <b>Buyurtmalaringiz:</b>\n\n"
+
+    for order_id in user["orders"][-10:]:
+        for order in orders:
+            if order["id"] == order_id:
+                text += (
+                    f"🆔 #{order['id']}\n"
+                    f"🛍 {order['service']}\n"
+                    f"🔢 {order['quantity']}\n"
+                    f"📊 {order['status']}\n\n"
+                )
+
+    bot.send_message(
+        message.chat.id,
+        text,
+        parse_mode="HTML",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================================================
+# HISOBIM
+# =========================================================
+
+@bot.message_handler(func=lambda m: m.text == "💵 Hisobim")
+def account(message):
+    user = get_user(message.from_user.id)
+
+    bot.send_message(
+        message.chat.id,
+        "💵 <b>Hisobingiz</b>\n\n"
+        f"💰 Balans: <b>{user['balance']:,} so‘m</b>\n"
+        f"👥 Referallar: <b>{user['referrals']}</b>\n"
+        f"🛒 Buyurtmalar: <b>{len(user['orders'])}</b>",
+        parse_mode="HTML",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================================================
+# REFERRAL
+# =========================================================
+
+@bot.message_handler(func=lambda m: m.text == "👥 Referral")
+def referral(message):
+    user = get_user(message.from_user.id)
+
+    try:
+        me = bot.get_me()
+        link = f"https://t.me/{me.username}?start={message.from_user.id}"
+    except Exception:
+        link = "Hozircha havola olinmadi."
+
+    bot.send_message(
+        message.chat.id,
+        "👥 <b>Referral tizimi</b>\n\n"
+        f"🔗 Sizning havolangiz:\n{link}\n\n"
+        "🎁 Har bir taklif qilingan foydalanuvchi uchun "
+        "<b>500 so‘m</b> bonus olasiz.\n\n"
+        f"👥 Takliflaringiz: <b>{user['referrals']}</b>",
+        parse_mode="HTML",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================================================
+# HISOB TO‘LDIRISH
+# =========================================================
+
+@bot.message_handler(func=lambda m: m.text == "💰 Hisob to‘ldirish")
+def add_balance(message):
+    bot.send_message(
+        message.chat.id,
+        "💰 <b>Hisob to‘ldirish</b>\n\n"
+        "To‘lov rekvizitlarini administrator orqali oling.\n\n"
+        "To‘lov qilganingizdan keyin chekni yuboring.",
+        parse_mode="HTML",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================================================
+# MUROJAAT
+# =========================================================
+
+@bot.message_handler(func=lambda m: m.text == "📞 Murojaat")
+def contact(message):
+    bot.send_message(
+        message.chat.id,
+        "📞 <b>Murojaat</b>\n\n"
+        "Savolingizni shu yerga yozib yuboring.\n"
+        "Administrator ko‘rib chiqadi.",
+        parse_mode="HTML",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================================================
+# QO‘LLAB-QUVVATLASH
+# =========================================================
+
+@bot.message_handler(func=lambda m: m.text == "☎️ Qo‘llab-quvvatlash")
+def support(message):
+    bot.send_message(
+        message.chat.id,
+        "☎️ <b>Qo‘llab-quvvatlash</b>\n\n"
+        "Muammoingizni yozib yuboring.",
+        parse_mode="HTML",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================================================
+# HAMKORLIK
+# =========================================================
+
+@bot.message_handler(func=lambda m: m.text == "🤝 Hamkorlik")
+def partnership(message):
+    bot.send_message(
+        message.chat.id,
+        "🤝 <b>Hamkorlik</b>\n\n"
+        "Hamkorlik bo‘yicha administratorga murojaat qiling.",
+        parse_mode="HTML",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================================================
+# ADMIN
+# =========================================================
+
+@bot.message_handler(commands=["admin"])
+def admin(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.send_message(
+            message.chat.id,
+            "❌ Siz administrator emassiz.",
+        )
         return
 
-    if action == "services":
-        edit(chat_id, mid, services_text(), services_menu())
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "👥 Foydalanuvchilar",
+            callback_data="admin_users",
+        )
+    )
+    markup.add(
+        types.InlineKeyboardButton(
+            "🛒 Buyurtmalar",
+            callback_data="admin_orders",
+        )
+    )
+
+    bot.send_message(
+        message.chat.id,
+        "⚙️ <b>ADMIN PANEL</b>",
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data == "admin_users"
+)
+def admin_users(call):
+    if call.from_user.id != ADMIN_ID:
         return
 
-    if action.startswith("svc:"):
-        service = action[4:]
-        if service in db["services"]:
-            ask_order(chat_id, uid, service)
+    bot.answer_callback_query(call.id)
+
+    bot.send_message(
+        call.message.chat.id,
+        f"👥 Foydalanuvchilar: <b>{len(users)}</b>\n"
+        f"🛒 Buyurtmalar: <b>{len(orders)}</b>",
+        parse_mode="HTML",
+    )
+
+
+@bot.callback_query_handler(
+    func=lambda call: call.data == "admin_orders"
+)
+def admin_orders(call):
+    if call.from_user.id != ADMIN_ID:
+        return
+
+    bot.answer_callback_query(call.id)
+
+    if not orders:
+        bot.send_message(
+            call.message.chat.id,
+            "📭 Buyurtmalar yo‘q.",
+        )
+        return
+
+    text = "🛒 <b>So‘nggi buyurtmalar:</b>\n\n"
+
+    for order in orders[-10:]:
+        text += (
+            f"🆔 #{order['id']}\n"
+            f"🛍 {order['service']}\n"
+            f"🔢 {order['quantity']}\n"
+            f"📊 {order['status']}\n\n"
+        )
+
+    bot.send_message(
+        call.message.chat.id,
+        text,
+        parse_mode="HTML",
+    )
+
+
+# =========================================================
+# FLASK — RENDER UCHUN
+# =========================================================
+
+@app.route("/")
+def home():
+    return "SMM Telegram Bot ishlayapti! ✅"
+
+
+@app.route("/health")
+def health():
+    return "OK"
+
+
+# =========================================================
+# TELEGRAM BOTNI ISHGA TUSHIRISH
+# MUHIM: Render gunicorn app:app bilan ishga tushirganda
+# __main__ bloki ishlamasligi mumkin. Shuning uchun polling
+# import vaqtida alohida thread'da ishga tushiriladi.
+# =========================================================
+
+def run_bot():
+    print("Telegram bot ishga tushmoqda...")
+
+    while True:
+        try:
+            bot.remove_webhook()
+            time.sleep(1)
+
+            print("Telegram polling boshlandi.")
+            bot.infinity_polling(
+                skip_pending=True,
+                timeout=60,
+                long_polling_timeout=60,
+            )
+        except Exception as error:
+            print(f"Telegram polling xatosi: {error}")
+            time.sleep(5)
+
+
+# Gunicorn import qilganda ham bot ishga tushadi.
+bot_thread = threading.Thread(
+    target=run_bot,
+    daemon=True,
+)
+bot_thread.start()
+
+
+# =========================================================
+# RENDER PORT
+# =========================================================
+
+port = int(os.environ.get("PORT", "10000"))
+
+if __name__ == "__main__":
+    app.run(
+        host="0.0.0.0",
+        port=port,
+                                 )
+    
