@@ -6,7 +6,7 @@ import telebot
 from telebot import types
 
 # =========================================================
-# SOZLAMALAR — SHU YERDAN O'ZGARTIRASIZ
+# SOZLAMALAR
 # =========================================================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -18,20 +18,18 @@ REQUIRED_CHANNELS = [
     # "@kanalingiz"
 ]
 
-# Xizmatlar va narxlar
+# Xizmatlar va narxlar (1000 dona uchun)
 SERVICES = {
     "Instagram obunachi": 1000,
     "Instagram like": 500,
     "Telegram obunachi": 1500,
     "Telegram post ko‘rish": 700,
     "TikTok like": 600,
-    "TikTok obunachi": 1200
+    "TikTok obunachi": 1200,
 }
 
-# =========================================================
-
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN topilmadi!")
+    raise ValueError("BOT_TOKEN topilmadi! Render Environment Variables bo‘limiga BOT_TOKEN qo‘ying.")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 app = Flask(__name__)
@@ -52,7 +50,7 @@ def get_user(user_id):
             "balance": 0,
             "orders": [],
             "referrals": 0,
-            "referrer": None
+            "referrer": None,
         }
     return users[user_id]
 
@@ -68,12 +66,9 @@ def check_subscription(user_id):
     for channel in REQUIRED_CHANNELS:
         try:
             member = bot.get_chat_member(channel, user_id)
-
             if member.status in ["left", "kicked"]:
                 return False
-
         except Exception:
-            # Kanal username noto‘g‘ri bo‘lsa, botni to‘xtatib qo‘ymaslik uchun
             return False
 
     return True
@@ -93,14 +88,14 @@ def subscription_message():
         markup.add(
             types.InlineKeyboardButton(
                 f"📢 {channel}",
-                url=f"https://t.me/{channel.replace('@', '')}"
+                url=f"https://t.me/{channel.replace('@', '')}",
             )
         )
 
     markup.add(
         types.InlineKeyboardButton(
             "✅ Tekshirish",
-            callback_data="check_sub"
+            callback_data="check_sub",
         )
     )
 
@@ -114,32 +109,26 @@ def subscription_message():
 def main_menu():
     markup = types.ReplyKeyboardMarkup(
         resize_keyboard=True,
-        row_width=2
+        row_width=2,
     )
 
     markup.add(
         types.KeyboardButton("🛍 Xizmatlar"),
-        types.KeyboardButton("📱 Nomer olish")
+        types.KeyboardButton("📱 Nomer olish"),
     )
-
     markup.add(
         types.KeyboardButton("🛒 Buyurtmalarim"),
-        types.KeyboardButton("👥 Referral")
+        types.KeyboardButton("👥 Referral"),
     )
-
     markup.add(
         types.KeyboardButton("💵 Hisobim"),
-        types.KeyboardButton("💰 Hisob to‘ldirish")
+        types.KeyboardButton("💰 Hisob to‘ldirish"),
     )
-
     markup.add(
         types.KeyboardButton("📞 Murojaat"),
-        types.KeyboardButton("☎️ Qo‘llab-quvvatlash")
+        types.KeyboardButton("☎️ Qo‘llab-quvvatlash"),
     )
-
-    markup.add(
-        types.KeyboardButton("🤝 Hamkorlik")
-    )
+    markup.add(types.KeyboardButton("🤝 Hamkorlik"))
 
     return markup
 
@@ -153,7 +142,6 @@ def start(message):
     user_id = message.from_user.id
     user = get_user(user_id)
 
-    # Referral
     args = message.text.split()
 
     if len(args) > 1:
@@ -172,9 +160,9 @@ def start(message):
                 bot.send_message(
                     referrer,
                     "🎉 Sizning referralingiz botga qo‘shildi!\n"
-                    "💰 Hisobingizga 500 so‘m qo‘shildi."
+                    "💰 Hisobingizga 500 so‘m qo‘shildi.",
                 )
-        except:
+        except (ValueError, TypeError):
             pass
 
     if not check_subscription(user_id):
@@ -183,7 +171,7 @@ def start(message):
             user_id,
             text,
             parse_mode="HTML",
-            reply_markup=markup
+            reply_markup=markup,
         )
         return
 
@@ -193,7 +181,7 @@ def start(message):
         "🤖 Xizmatlar botiga xush kelibsiz!\n"
         "Kerakli bo‘limni tanlang:",
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
 
@@ -206,22 +194,17 @@ def check_sub(call):
     user_id = call.from_user.id
 
     if check_subscription(user_id):
-        bot.answer_callback_query(
-            call.id,
-            "✅ Obuna tasdiqlandi!"
-        )
-
+        bot.answer_callback_query(call.id, "✅ Obuna tasdiqlandi!")
         bot.send_message(
             user_id,
             "✅ Obuna tasdiqlandi!\n\nAsosiy menyu:",
-            reply_markup=main_menu()
+            reply_markup=main_menu(),
         )
-
     else:
         bot.answer_callback_query(
             call.id,
             "❌ Hali barcha kanallarga obuna bo‘lmagansiz!",
-            show_alert=True
+            show_alert=True,
         )
 
 
@@ -237,7 +220,7 @@ def services(message):
             message.chat.id,
             text,
             parse_mode="HTML",
-            reply_markup=markup
+            reply_markup=markup,
         )
         return
 
@@ -247,22 +230,17 @@ def services(message):
         markup.add(
             types.InlineKeyboardButton(
                 f"🛍 {service} — {price:,} so‘m",
-                callback_data="service|" + service
+                callback_data="service|" + service,
             )
         )
 
     bot.send_message(
         message.chat.id,
-        "🛍 <b>Xizmatlar:</b>\n\n"
-        "Kerakli xizmatni tanlang:",
+        "🛍 <b>Xizmatlar:</b>\n\nKerakli xizmatni tanlang:",
         parse_mode="HTML",
-        reply_markup=markup
+        reply_markup=markup,
     )
 
-
-# =========================================================
-# XIZMAT TANLASH
-# =========================================================
 
 @bot.callback_query_handler(
     func=lambda call: call.data.startswith("service|")
@@ -277,18 +255,16 @@ def select_service(call):
     price = SERVICES[service]
 
     markup = types.InlineKeyboardMarkup()
-
     markup.add(
         types.InlineKeyboardButton(
             "🛒 Buyurtma berish",
-            callback_data="order|" + service
+            callback_data="order|" + service,
         )
     )
-
     markup.add(
         types.InlineKeyboardButton(
             "⬅️ Orqaga",
-            callback_data="back_services"
+            callback_data="back_services",
         )
     )
 
@@ -299,12 +275,40 @@ def select_service(call):
         call.message.chat.id,
         call.message.message_id,
         parse_mode="HTML",
-        reply_markup=markup
+        reply_markup=markup,
     )
 
 
+@bot.callback_query_handler(
+    func=lambda call: call.data == "back_services"
+)
+def back_services(call):
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(
+        "🛍 <b>Xizmatlar:</b>\n\nKerakli xizmatni tanlang:",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="HTML",
+        reply_markup=service_keyboard(),
+    )
+
+
+def service_keyboard():
+    markup = types.InlineKeyboardMarkup()
+
+    for service, price in SERVICES.items():
+        markup.add(
+            types.InlineKeyboardButton(
+                f"🛍 {service} — {price:,} so‘m",
+                callback_data="service|" + service,
+            )
+        )
+
+    return markup
+
+
 # =========================================================
-# BUYURTMA BOSHLASH
+# BUYURTMA
 # =========================================================
 
 @bot.callback_query_handler(
@@ -313,94 +317,102 @@ def select_service(call):
 def start_order(call):
     service = call.data.split("|", 1)[1]
 
+    if service not in SERVICES:
+        bot.answer_callback_query(call.id, "Xizmat topilmadi!")
+        return
+
     bot.answer_callback_query(call.id)
 
     msg = bot.send_message(
         call.message.chat.id,
         f"🛒 <b>{service}</b>\n\n"
         "🔗 Xizmat bajariladigan havolani yuboring.\n\n"
-        "Masalan:\n"
-        "https://t.me/kanal",
-        parse_mode="HTML"
+        "Masalan:\nhttps://t.me/kanal",
+        parse_mode="HTML",
     )
 
-    bot.register_next_step_handler(
-        msg,
-        get_link,
-        service
-    )
+    bot.register_next_step_handler(msg, get_link, service)
 
-
-# =========================================================
-# HAVOLA OLISH
-# =========================================================
 
 def get_link(message, service):
+    if not message.text:
+        msg = bot.send_message(
+            message.chat.id,
+            "❌ Havola yuboring.",
+        )
+        bot.register_next_step_handler(msg, get_link, service)
+        return
+
     link = message.text.strip()
 
-    if not link.startswith("http"):
+    if not link.startswith(("http://", "https://")):
         msg = bot.send_message(
             message.chat.id,
             "❌ Havola noto‘g‘ri.\n\n"
-            "https:// bilan boshlanadigan havola yuboring."
+            "https:// bilan boshlanadigan havola yuboring.",
         )
-
-        bot.register_next_step_handler(
-            msg,
-            get_link,
-            service
-        )
+        bot.register_next_step_handler(msg, get_link, service)
         return
 
     msg = bot.send_message(
         message.chat.id,
-        "🔢 Miqdorni kiriting.\n\n"
-        "Masalan: <b>1000</b>",
-        parse_mode="HTML"
+        "🔢 Miqdorni kiriting.\n\nMasalan: <b>1000</b>",
+        parse_mode="HTML",
     )
 
     bot.register_next_step_handler(
         msg,
         get_quantity,
         service,
-        link
+        link,
     )
 
-
-# =========================================================
-# MIQDOR OLISH
-# =========================================================
 
 def get_quantity(message, service, link):
     global next_order_id
 
     try:
-        quantity = int(message.text)
-    except:
+        quantity = int(message.text.strip())
+    except (ValueError, AttributeError):
         msg = bot.send_message(
             message.chat.id,
-            "❌ Miqdorni faqat raqam bilan kiriting."
+            "❌ Miqdorni faqat raqam bilan kiriting.",
         )
-
         bot.register_next_step_handler(
             msg,
             get_quantity,
             service,
-            link
+            link,
         )
         return
 
     if quantity <= 0:
-        bot.send_message(
+        msg = bot.send_message(
             message.chat.id,
-            "❌ Miqdor 0 dan katta bo‘lishi kerak."
+            "❌ Miqdor 0 dan katta bo‘lishi kerak.",
+        )
+        bot.register_next_step_handler(
+            msg,
+            get_quantity,
+            service,
+            link,
         )
         return
 
-    price = SERVICES[service]
+    price = SERVICES.get(service)
 
-    # Narx 1000 birlik uchun
+    if price is None:
+        bot.send_message(
+            message.chat.id,
+            "❌ Xizmat topilmadi.",
+            reply_markup=main_menu(),
+        )
+        return
+
     total = int(price * quantity / 1000)
+
+    if total <= 0:
+        total = 1
 
     user = get_user(message.from_user.id)
 
@@ -409,9 +421,10 @@ def get_quantity(message, service, link):
             message.chat.id,
             "❌ <b>Hisobingizda mablag‘ yetarli emas!</b>\n\n"
             f"💰 Kerakli summa: <b>{total:,} so‘m</b>\n"
-            f"💵 Sizning balansingiz: <b>{user['balance']:,} so‘m</b>\n\n"
+            f"💵 Balansingiz: <b>{user['balance']:,} so‘m</b>\n\n"
             "💰 Hisobni to‘ldiring va qayta urinib ko‘ring.",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=main_menu(),
         )
         return
 
@@ -424,7 +437,7 @@ def get_quantity(message, service, link):
         "link": link,
         "quantity": quantity,
         "price": total,
-        "status": "Kutilmoqda"
+        "status": "Kutilmoqda",
     }
 
     orders.append(order)
@@ -440,23 +453,26 @@ def get_quantity(message, service, link):
         f"🛍 Xizmat: <b>{service}</b>\n"
         f"🔢 Miqdor: <b>{quantity}</b>\n"
         f"💰 Narx: <b>{total:,} so‘m</b>\n"
-        f"📊 Holat: <b>Kutilmoqda</b>",
+        "📊 Holat: <b>Kutilmoqda</b>",
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
     if ADMIN_ID:
-        bot.send_message(
-            ADMIN_ID,
-            "🔔 <b>Yangi buyurtma!</b>\n\n"
-            f"🆔 #{order_id}\n"
-            f"👤 ID: <code>{message.from_user.id}</code>\n"
-            f"🛍 {service}\n"
-            f"🔢 Miqdor: {quantity}\n"
-            f"🔗 {link}\n"
-            f"💰 {total:,} so‘m",
-            parse_mode="HTML"
-        )
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                "🔔 <b>Yangi buyurtma!</b>\n\n"
+                f"🆔 #{order_id}\n"
+                f"👤 ID: <code>{message.from_user.id}</code>\n"
+                f"🛍 {service}\n"
+                f"🔢 Miqdor: {quantity}\n"
+                f"🔗 {link}\n"
+                f"💰 {total:,} so‘m",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
 
 # =========================================================
@@ -471,7 +487,7 @@ def my_orders(message):
         bot.send_message(
             message.chat.id,
             "📭 Sizda hali buyurtmalar yo‘q.",
-            reply_markup=main_menu()
+            reply_markup=main_menu(),
         )
         return
 
@@ -491,7 +507,7 @@ def my_orders(message):
         message.chat.id,
         text,
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
 
@@ -510,7 +526,7 @@ def account(message):
         f"👥 Referallar: <b>{user['referrals']}</b>\n"
         f"🛒 Buyurtmalar: <b>{len(user['orders'])}</b>",
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
 
@@ -522,8 +538,11 @@ def account(message):
 def referral(message):
     user = get_user(message.from_user.id)
 
-    me = bot.get_me()
-    link = f"https://t.me/{me.username}?start={message.from_user.id}"
+    try:
+        me = bot.get_me()
+        link = f"https://t.me/{me.username}?start={message.from_user.id}"
+    except Exception:
+        link = "Hozircha havola olinmadi."
 
     bot.send_message(
         message.chat.id,
@@ -533,7 +552,7 @@ def referral(message):
         "<b>500 so‘m</b> bonus olasiz.\n\n"
         f"👥 Takliflaringiz: <b>{user['referrals']}</b>",
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
 
@@ -549,7 +568,7 @@ def add_balance(message):
         "To‘lov rekvizitlarini administrator orqali oling.\n\n"
         "To‘lov qilganingizdan keyin chekni yuboring.",
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
 
@@ -565,7 +584,7 @@ def contact(message):
         "Savolingizni shu yerga yozib yuboring.\n"
         "Administrator ko‘rib chiqadi.",
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
 
@@ -580,7 +599,7 @@ def support(message):
         "☎️ <b>Qo‘llab-quvvatlash</b>\n\n"
         "Muammoingizni yozib yuboring.",
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
 
@@ -595,7 +614,7 @@ def partnership(message):
         "🤝 <b>Hamkorlik</b>\n\n"
         "Hamkorlik bo‘yicha administratorga murojaat qiling.",
         parse_mode="HTML",
-        reply_markup=main_menu()
+        reply_markup=main_menu(),
     )
 
 
@@ -608,23 +627,21 @@ def admin(message):
     if message.from_user.id != ADMIN_ID:
         bot.send_message(
             message.chat.id,
-            "❌ Siz administrator emassiz."
+            "❌ Siz administrator emassiz.",
         )
         return
 
     markup = types.InlineKeyboardMarkup()
-
     markup.add(
         types.InlineKeyboardButton(
             "👥 Foydalanuvchilar",
-            callback_data="admin_users"
+            callback_data="admin_users",
         )
     )
-
     markup.add(
         types.InlineKeyboardButton(
             "🛒 Buyurtmalar",
-            callback_data="admin_orders"
+            callback_data="admin_orders",
         )
     )
 
@@ -632,11 +649,13 @@ def admin(message):
         message.chat.id,
         "⚙️ <b>ADMIN PANEL</b>",
         parse_mode="HTML",
-        reply_markup=markup
+        reply_markup=markup,
     )
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "admin_users")
+@bot.callback_query_handler(
+    func=lambda call: call.data == "admin_users"
+)
 def admin_users(call):
     if call.from_user.id != ADMIN_ID:
         return
@@ -647,11 +666,13 @@ def admin_users(call):
         call.message.chat.id,
         f"👥 Foydalanuvchilar: <b>{len(users)}</b>\n"
         f"🛒 Buyurtmalar: <b>{len(orders)}</b>",
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
-@bot.callback_query_handler(func=lambda call: call.data == "admin_orders")
+@bot.callback_query_handler(
+    func=lambda call: call.data == "admin_orders"
+)
 def admin_orders(call):
     if call.from_user.id != ADMIN_ID:
         return
@@ -661,7 +682,7 @@ def admin_orders(call):
     if not orders:
         bot.send_message(
             call.message.chat.id,
-            "📭 Buyurtmalar yo‘q."
+            "📭 Buyurtmalar yo‘q.",
         )
         return
 
@@ -678,7 +699,7 @@ def admin_orders(call):
     bot.send_message(
         call.message.chat.id,
         text,
-        parse_mode="HTML"
+        parse_mode="HTML",
     )
 
 
@@ -697,29 +718,48 @@ def health():
 
 
 # =========================================================
-# BOTNI ISHGA TUSHIRISH
+# TELEGRAM BOTNI ISHGA TUSHIRISH
+# MUHIM: Render gunicorn app:app bilan ishga tushirganda
+# __main__ bloki ishlamasligi mumkin. Shuning uchun polling
+# import vaqtida alohida thread'da ishga tushiriladi.
 # =========================================================
 
 def run_bot():
-    print("Telegram bot ishga tushdi...")
-    bot.remove_webhook()
-    time.sleep(1)
-    bot.infinity_polling(
-        skip_pending=True,
-        timeout=60,
-        long_polling_timeout=60
-    )
+    print("Telegram bot ishga tushmoqda...")
 
+    while True:
+        try:
+            bot.remove_webhook()
+            time.sleep(1)
+
+            print("Telegram polling boshlandi.")
+            bot.infinity_polling(
+                skip_pending=True,
+                timeout=60,
+                long_polling_timeout=60,
+            )
+        except Exception as error:
+            print(f"Telegram polling xatosi: {error}")
+            time.sleep(5)
+
+
+# Gunicorn import qilganda ham bot ishga tushadi.
+bot_thread = threading.Thread(
+    target=run_bot,
+    daemon=True,
+)
+bot_thread.start()
+
+
+# =========================================================
+# RENDER PORT
+# =========================================================
+
+port = int(os.environ.get("PORT", "10000"))
 
 if __name__ == "__main__":
-    threading.Thread(
-        target=run_bot,
-        daemon=True
-    ).start()
-
-    port = int(os.environ.get("PORT", 10000))
-
     app.run(
         host="0.0.0.0",
-        port=port
-    )
+        port=port,
+            )
+
